@@ -123,34 +123,29 @@ class VotesTask(RelBenchNodeTask):
         timestamp_df = pd.DataFrame({"timestamp": timestamps})
         votes = db.table_dict["votes"].df
         posts = db.table_dict["posts"].df
+        start = timestamp_df.timestamp.min() - self.timedelta  # hack to make val 2017-2019
+        end = timestamp_df.timestamp.max()
 
         df = duckdb.sql(
             f"""
             SELECT
-                t.timestamp,
-                p.id AS PostId,
-                COUNT(distinct v.id) AS popularity
-            FROM
-                timestamp_df t
-            LEFT JOIN
-                posts p
-            ON
-                p.CreationDate <= t.timestamp AND
-                p.owneruserid != -1 AND
-                p.owneruserid is not null AND
-                p.PostTypeId = 1
-            LEFT JOIN
-                votes v
-            ON
-                p.id = v.PostId AND
-                v.CreationDate > t.timestamp AND
-                v.CreationDate <= t.timestamp + INTERVAL '{self.timedelta}' AND
-                v.votetypeid = 2
-            GROUP BY
-                t.timestamp,
-                p.id
-            ;
-
+                posts.Id AS PostId,
+                (posts.CreationDate + INTERVAL 1 day)::datetime AS timestamp,
+                count(distinct votes.Id) AS popularity
+            FROM posts
+            LEFT JOIN votes
+                ON
+                    posts.Id = votes.PostId
+                    AND votes.CreationDate > (posts.CreationDate + INTERVAL 1 day)
+                    AND votes.CreationDate <= (posts.CreationDate + INTERVAL 31 day)
+                    AND votes.VoteTypeId = 2
+            WHERE
+                posts.OwnerUserId != -1
+                AND posts.OwnerUserId IS NOT NULL
+                AND posts.PostTypeId = 1
+                AND timestamp >= '{start}'::timestamp
+                AND timestamp < '{end}'::timestamp
+            GROUP BY ALL
             """
         ).df()
 
