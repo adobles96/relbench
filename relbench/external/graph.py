@@ -43,7 +43,7 @@ def make_pkey_fkey_graph(
     col_to_stype_dict: Dict[str, Dict[str, stype]],
     text_embedder_cfg: Optional[TextEmbedderConfig] = None,
     cache_dir: Optional[str] = None,
-) -> Tuple[HeteroData, Dict[str, dict[str, dict[StatType, Any]]]]:
+) -> Tuple[HeteroData, Dict[str, Dict[str, Dict[StatType, Any]]]]:
     r"""Given a :class:`Database` object, construct a heterogeneous graph with
     primary-foreign key relationships, together with the column stats of each
     table.
@@ -124,9 +124,10 @@ def make_pkey_fkey_graph(
             edge_type = (table_name, f"f2p_{fkey_name}", pkey_table_name)
             data[edge_type].edge_index = sort_edge_index(edge_index)
 
-            # pkey -> fkey edges
+            # pkey -> fkey edges.
+            # "rev_" is added so that PyG loader recognizes the reverse edges
             edge_index = torch.stack([pkey_index, fkey_index], dim=0)
-            edge_type = (pkey_table_name, f"p2f_{fkey_name}", table_name)
+            edge_type = (pkey_table_name, f"rev_f2p_{fkey_name}", table_name)
             data[edge_type].edge_index = sort_edge_index(edge_index)
 
     data.validate()
