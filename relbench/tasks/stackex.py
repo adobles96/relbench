@@ -162,6 +162,62 @@ class VotesTask(RelBenchNodeTask):
         )
 
 
+class VotesBinaryTask(RelBenchNodeTask):
+    r"""Predict the number of upvotes that an existing question will receive in
+    the next 2 years."""
+
+    name = "rel-stackex-votes-binary"
+    task_type = TaskType.BINARY_CLASSIFICATION
+    entity_col = "PostId"
+    entity_table = "posts"
+    time_col = "timestamp"
+    target_col = "popularity"
+    timedelta = pd.Timedelta(days=365 // 4)
+    metrics = [average_precision, accuracy, f1, roc_auc]
+
+    def make_table(self, db: Database, timestamps: "pd.Series[pd.Timestamp]") -> Table:
+        timestamp_df = pd.DataFrame({"timestamp": timestamps})
+        votes = db.table_dict["votes"].df
+        posts = db.table_dict["posts"].df
+
+        df = duckdb.sql(
+            f"""
+            SELECT
+                t.timestamp,
+                p.id AS PostId,
+                (COUNT(distinct v.id) > 0)::int AS popularity
+            FROM
+                timestamp_df t
+            LEFT JOIN
+                posts p
+            ON
+                p.CreationDate <= t.timestamp AND
+                p.owneruserid != -1 AND
+                p.owneruserid is not null AND
+                p.PostTypeId = 1
+            LEFT JOIN
+                votes v
+            ON
+                p.id = v.PostId AND
+                v.CreationDate > t.timestamp AND
+                v.CreationDate <= t.timestamp + INTERVAL '{self.timedelta}' AND
+                v.votetypeid = 2
+            GROUP BY
+                t.timestamp,
+                p.id
+            ;
+
+            """
+        ).df()
+
+        return Table(
+            df=df,
+            fkey_col_to_pkey_table={self.entity_col: self.entity_table},
+            pkey_col=None,
+            time_col=self.time_col,
+        )
+
+
 class BadgesTask(RelBenchNodeTask):
     r"""Predict if each user will receive in a new badge the next 2 years."""
 
