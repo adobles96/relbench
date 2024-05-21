@@ -108,7 +108,7 @@ class Model(torch.nn.Module):
         )
         if self.exp_head:
             out = self.head(x_dict[entity_table][: seed_time.size(0)])
-            return torch.exp(out[:, 0]) + out[:, 1]
+            return (torch.exp(out[:, 0]) + out[:, 1])[:, None]
         return self.head(x_dict[entity_table][: seed_time.size(0)])
 
     def forward_dst_readout(
