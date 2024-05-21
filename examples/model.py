@@ -26,6 +26,8 @@ class Model(torch.nn.Module):
         shallow_list: List[NodeType] = [],
         # ID awareness
         id_awareness: bool = False,
+        # Exponential head for regression tasks
+        exp_head: bool = False,
     ):
         super().__init__()
 
@@ -50,9 +52,11 @@ class Model(torch.nn.Module):
             aggr=aggr,
             num_layers=num_layers,
         )
+        self.exp_head = exp_head
+        assert not exp_head or out_channels == 1, "Exponential head requires out_channels == 1"
         self.head = MLP(
             channels,
-            out_channels=out_channels,
+            out_channels=2 * out_channels if self.exp_head else out_channels,
             norm=norm,
             num_layers=1,
         )
@@ -102,7 +106,9 @@ class Model(torch.nn.Module):
             batch.num_sampled_nodes_dict,
             batch.num_sampled_edges_dict,
         )
-
+        if self.exp_head:
+            out = self.head(x_dict[entity_table][: seed_time.size(0)])
+            return torch.exp(out[:, 0]) + out[:, 1]
         return self.head(x_dict[entity_table][: seed_time.size(0)])
 
     def forward_dst_readout(
