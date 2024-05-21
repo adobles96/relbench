@@ -35,6 +35,7 @@ parser.add_argument("--temporal_strategy", type=str, default="uniform")
 parser.add_argument("--num_workers", type=int, default=1)
 parser.add_argument("--max_steps_per_epoch", type=int, default=2000)
 parser.add_argument("--num_ensembles", type=int, default=1)
+parser.add_argument("--use_exp_head", action="store_true")
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -177,6 +178,7 @@ for ensemble_idx in range(args.num_ensembles):
         out_channels=out_channels,
         aggr=args.aggr,
         norm="batch_norm",
+        exp_head=args.use_exp_head,
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     state_dict = None
