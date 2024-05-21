@@ -11,6 +11,7 @@ from relbench.tasks.stackex import (
     UserCommentOnPostTask,
     UsersInteractTask,
     VotesTask,
+    VotesBinaryTask
 )
 from relbench.utils import unzip_processor
 
@@ -24,6 +25,7 @@ class StackExDataset(RelBenchDataset):
     task_cls_list = [
         EngageTask,
         VotesTask,
+        VotesBinaryTask,
         BadgesTask,
         UserCommentOnPostTask,
         RelatedPostTask,
