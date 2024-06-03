@@ -9,7 +9,6 @@ from relbench.tasks.stackex import (
     EngageTask,
     RelatedPostTask,
     UserCommentOnPostTask,
-    UsersInteractTask,
     VotesTask,
     VotesBinaryTask
 )
@@ -29,7 +28,6 @@ class StackExDataset(RelBenchDataset):
         BadgesTask,
         UserCommentOnPostTask,
         RelatedPostTask,
-        UsersInteractTask,
     ]
 
     def __init__(
