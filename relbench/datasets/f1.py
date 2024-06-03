@@ -5,7 +5,7 @@ import pandas as pd
 import pooch
 
 from relbench.data import Database, RelBenchDataset, Table
-from relbench.tasks.f1 import DidNotFinishTask, PositionTask, QualifyingTask
+from relbench.tasks.f1 import DidNotFinishTask, PositionTask, PositionBinaryTask, QualifyingTask
 from relbench.utils import unzip_processor
 
 
@@ -16,6 +16,7 @@ class F1Dataset(RelBenchDataset):
     max_eval_time_frames = 40
     task_cls_list = [
         PositionTask,
+        PositionBinaryTask,
         DidNotFinishTask,
         QualifyingTask,
     ]
