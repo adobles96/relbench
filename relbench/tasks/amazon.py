@@ -134,6 +134,66 @@ class LTVTask(RelBenchNodeTask):
         )
 
 
+class LTVBinaryTask(RelBenchNodeTask):
+    r"""LTV (life-time value) for a customer is the sum of prices of products
+    that the customer reviews in the time window."""
+
+    name = "rel-amazon-ltv-binary"
+    task_type = TaskType.BINARY_CLASSIFICATION
+    entity_col = "customer_id"
+    entity_table = "customer"
+    time_col = "timestamp"
+    target_col = "ltv"
+    timedelta = pd.Timedelta(days=365 // 4)
+    metrics = [average_precision, accuracy, f1, roc_auc]
+
+    def make_table(self, db: Database, timestamps: "pd.Series[pd.Timestamp]") -> Table:
+        product = db.table_dict["product"].df
+        customer = db.table_dict["customer"].df
+        review = db.table_dict["review"].df
+        timestamp_df = pd.DataFrame({"timestamp": timestamps})
+
+        df = duckdb.sql(
+            f"""
+            SELECT
+                timestamp,
+                customer_id,
+                ltv,
+            FROM
+                timestamp_df,
+                customer,
+                (
+                    SELECT
+                        (COALESCE(SUM(price), 0) > 0)::int as ltv,
+                    FROM
+                        review,
+                        product
+                    WHERE
+                        review.customer_id = customer.customer_id AND
+                        review.product_id = product.product_id AND
+                        review_time > timestamp AND
+                        review_time <= timestamp + INTERVAL '{self.timedelta}'
+                )
+            WHERE
+                EXISTS (
+                    SELECT 1
+                    FROM review
+                    WHERE
+                        review.customer_id = customer.customer_id AND
+                        review_time > timestamp - INTERVAL '{self.timedelta}' AND
+                        review_time <= timestamp
+                )
+            """
+        ).df()
+
+        return Table(
+            df=df,
+            fkey_col_to_pkey_table={"customer_id": "customer"},
+            pkey_col=None,
+            time_col="timestamp",
+        )
+
+
 class ProductChurnTask(RelBenchNodeTask):
     r"""Churn for a product is 1 if the product recieves at least one review
     in the time window, else 0."""

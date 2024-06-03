@@ -11,6 +11,7 @@ from relbench.data import Database, RelBenchDataset, Table
 from relbench.tasks.amazon import (
     ChurnTask,
     LTVTask,
+    LTVBinaryTask,
     ProductChurnTask,
     ProductDetailedReviewRecommendationTask,
     ProductFiveStarRecommendationTask,
@@ -30,6 +31,7 @@ class AmazonDataset(RelBenchDataset):
         ChurnTask,
         ProductChurnTask,
         LTVTask,
+        LTVBinaryTask,
         ProductLTVTask,
         ProductRecommendationTask,
         ProductFiveStarRecommendationTask,
