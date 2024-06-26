@@ -6,11 +6,13 @@ from typing import Dict
 
 import numpy as np
 import torch
+import torch_frame
 from inferred_stypes import dataset2inferred_stypes
 from model import Model
 from text_embedder import GloveTextEmbedding
 from torch.nn import BCEWithLogitsLoss, L1Loss
 from torch_frame.config.text_embedder import TextEmbedderConfig
+from torch_frame.gbdt import LightGBM
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.seed import seed_everything
 from tqdm import tqdm
@@ -21,8 +23,8 @@ from relbench.datasets import get_dataset
 from relbench.external.graph import get_node_train_table_input, make_pkey_fkey_graph
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="rel-event")
-parser.add_argument("--task", type=str, default="user-attendance")
+parser.add_argument("--dataset", type=str, default="rel-stackex")
+parser.add_argument("--task", type=str, default="rel-stackex-engage")
 parser.add_argument("--lr", type=float, default=0.005)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--batch_size", type=int, default=512)
@@ -32,6 +34,16 @@ parser.add_argument("--num_layers", type=int, default=2)
 parser.add_argument("--num_neighbors", type=int, default=128)
 parser.add_argument("--temporal_strategy", type=str, default="uniform")
 parser.add_argument("--max_steps_per_epoch", type=int, default=2000)
+parser.add_argument("--num_ensembles", type=int, default=1)
+parser.add_argument(
+    "--attempt_load_state_dict", action="store_true"
+)  # If true, try to load pretrained state dict
+parser.add_argument(
+    "--sample_size",
+    type=int,
+    default=50_000,
+    help="Subsample the specified number of training data to train lightgbm model.",
+)
 parser.add_argument("--num_workers", type=int, default=0)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument(
@@ -40,7 +52,6 @@ parser.add_argument(
     default=os.path.expanduser("~/.cache/relbench/materialized"),
 )
 args = parser.parse_args()
-
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available():
@@ -84,8 +95,6 @@ elif task.task_type == TaskType.MULTILABEL_CLASSIFICATION:
     tune_metric = "multilabel_auprc_macro"
     higher_is_better = True
     multilabel = True
-else:
-    raise ValueError(f"Task type {task.task_type} is unsupported")
 
 loader_dict: Dict[str, NeighborLoader] = {}
 for split, table in [
@@ -169,6 +178,51 @@ def test(loader: NeighborLoader) -> np.ndarray:
     return torch.cat(pred_list, dim=0).numpy()
 
 
+@torch.no_grad()
+def embed(
+    model: Model,
+    loader: NeighborLoader,
+    no_label: bool = False,
+    stop_at: int = None,
+) -> Dict[str, float]:
+
+    # remove model.head from the model
+    from torch.nn import Identity
+
+    model_embed = copy.deepcopy(model)
+    model_embed.head = Identity()  # remove the head
+    model_embed.eval()
+
+    embed_list = []
+    y_list = []
+    for idx, batch in enumerate(tqdm(loader)):
+        batch = batch.to(device)
+        embed = model_embed(
+            batch,
+            task.entity_table,
+        )
+        embed_list.append(embed.detach().cpu())
+
+        if not no_label:
+            y = batch[entity_table].y
+            y_list.append(y.detach().cpu())
+
+        if stop_at is not None and idx >= stop_at:
+            break
+
+    emb = torch.cat(embed_list, dim=0)
+
+    if not no_label:
+        y = torch.cat(y_list, dim=0)
+    else:
+        y = None
+
+    return emb, y
+
+
+# =====================
+# Model training
+# =====================
 model = Model(
     data=data,
     col_stats_dict=col_stats_dict,
@@ -178,22 +232,45 @@ model = Model(
     aggr=args.aggr,
     norm="batch_norm",
 ).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-state_dict = None
-best_val_metric = -math.inf if higher_is_better else math.inf
-for epoch in range(1, args.epochs + 1):
-    train_loss = train()
-    val_pred = test(loader_dict["val"])
-    val_metrics = task.evaluate(val_pred, task.val_table)
-    print(f"Epoch: {epoch:02d}, Train loss: {train_loss}, Val metrics: {val_metrics}")
-
-    if (higher_is_better and val_metrics[tune_metric] > best_val_metric) or (
-        not higher_is_better and val_metrics[tune_metric] < best_val_metric
-    ):
-        best_val_metric = val_metrics[tune_metric]
-        state_dict = copy.deepcopy(model.state_dict())
 
 
+STATE_DICT_PTH = "results/{args.dataset}_{args.task}_state_dict.pth"
+
+# if state dict exists, load it
+if os.path.exists(STATE_DICT_PTH) and args.attempt_load_state_dict:
+    # load state dict
+    state_dict = torch.load(STATE_DICT_PTH)
+    model.load_state_dict(state_dict)
+
+else:
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    state_dict = None
+    best_val_metric = 0 if higher_is_better else math.inf
+    for epoch in range(1, args.epochs + 1):
+        train_loss = train()
+        val_pred = test(loader_dict["val"])
+        val_metrics = task.evaluate(val_pred, task.val_table)
+        print(
+            f"Epoch: {epoch:02d}, Train loss: {train_loss}, Val metrics: {val_metrics}"
+        )
+
+        if (higher_is_better and val_metrics[tune_metric] > best_val_metric) or (
+            not higher_is_better and val_metrics[tune_metric] < best_val_metric
+        ):
+            best_val_metric = val_metrics[tune_metric]
+            state_dict = copy.deepcopy(model.state_dict())
+
+    # save state dict
+    if args.attempt_load_state_dict:
+        torch.save(state_dict, STATE_DICT_PTH)
+
+
+val_pred_accum = 0
+test_pred_accum = 0
+
+print("=====================")
+print("GNN model performance")
+print("=====================")
 model.load_state_dict(state_dict)
 val_pred = test(loader_dict["val"])
 val_metrics = task.evaluate(val_pred, task.val_table)
@@ -202,3 +279,64 @@ print(f"Best Val metrics: {val_metrics}")
 test_pred = test(loader_dict["test"])
 test_metrics = task.evaluate(test_pred)
 print(f"Best test metrics: {test_metrics}")
+
+
+print("=====================")
+print("Embedding performance")
+print("=====================")
+
+emb_train, y_train = embed(
+    model,
+    loader_dict["train"],
+    stop_at=args.sample_size // args.batch_size if args.sample_size else None,
+)
+emb_val, y_val = embed(model, loader_dict["val"])
+emb_test, _ = embed(model, loader_dict["test"], no_label=True)
+
+
+# hack to convert to torch_frame
+def tensor_to_tf(data, y=None):
+    tf = torch_frame.TensorFrame(
+        feat_dict={torch_frame.numerical: data},
+        col_names_dict={
+            torch_frame.numerical: [f"feat_{i}" for i in range(data.shape[1])],
+        },
+    )
+    if y is not None:
+        tf.y = y
+
+    return tf
+
+
+tf_train = tensor_to_tf(emb_train, y_train)
+tf_val = tensor_to_tf(emb_val, y_val)
+tf_test = tensor_to_tf(emb_test)
+
+
+from torch_frame import TaskType as TaskTypeTorchFrame
+
+# rename tune_metric to  torch-frame Metric format
+from torch_frame.typing import Metric
+
+if tune_metric == "roc_auc":
+    tune_metric = Metric.ROCAUC
+elif tune_metric == "mae":
+    tune_metric = Metric.MAE
+
+
+relbench2torch_frame = {
+    TaskType.MULTILABEL_CLASSIFICATION: TaskTypeTorchFrame.MULTILABEL_CLASSIFICATION,
+    TaskType.BINARY_CLASSIFICATION: TaskTypeTorchFrame.BINARY_CLASSIFICATION,
+    TaskType.REGRESSION: TaskTypeTorchFrame.REGRESSION,
+}
+task_type = relbench2torch_frame[task.task_type]
+model = LightGBM(task_type=task_type, metric=tune_metric)
+model.tune(tf_train, tf_val, num_trials=10)
+
+
+pred = model.predict(tf_val).numpy()
+val_metrics = task.evaluate(pred, task.val_table)
+print(f"Val: {val_metrics}")
+
+pred = model.predict(tf_test).numpy()
+print(f"Test: {test_metrics}")

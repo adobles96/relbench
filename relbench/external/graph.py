@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,7 +16,7 @@ from torch_geometric.utils import sort_edge_index
 
 from relbench.data import Database, LinkTask, NodeTask, Table
 from relbench.data.task_base import TaskType
-from relbench.external.utils import to_unix_time
+from relbench.external.utils import remove_pkey_fkey, to_unix_time
 
 
 def get_stype_proposal(db: Database) -> Dict[str, Dict[str, Any]]:
@@ -52,10 +52,11 @@ def make_pkey_fkey_graph(
         db (Database): A database object containing a set of tables.
         col_to_stype_dict (Dict[str, Dict[str, stype]]): Column to stype for
             each table.
+        text_embedder_cfg (TextEmbedderConfig): Text embedder config.
         cache_dir (str, optional): A directory for storing materialized tensor
             frames. If specified, we will either cache the file or use the
             cached file. If not specified, we will not use cached file and
-            re-process everything from scrach without saving the cache.
+            re-process everything from scratch without saving the cache.
 
     Returns:
         HeteroData: The heterogeneous :class:`PyG` object with
@@ -77,16 +78,13 @@ def make_pkey_fkey_graph(
 
         # Remove pkey, fkey columns since they will not be used as input
         # feature.
-        if table.pkey_col is not None:
-            if table.pkey_col in col_to_stype:
-                col_to_stype.pop(table.pkey_col)
-        for fkey in table.fkey_col_to_pkey_table.keys():
-            if fkey in col_to_stype:
-                col_to_stype.pop(fkey)
+        remove_pkey_fkey(col_to_stype, table)
 
         if len(col_to_stype) == 0:  # Add constant feature in case df is empty:
             col_to_stype = {"__const__": stype.numerical}
-            df = pd.DataFrame({"__const__": np.ones(len(table.df))})
+            # We need to add edges later, so we need to also keep the fkeys
+            fkey_dict = {key: df[key] for key in table.fkey_col_to_pkey_table}
+            df = pd.DataFrame({"__const__": np.ones(len(table.df)), **fkey_dict})
 
         path = (
             None if cache_dir is None else os.path.join(cache_dir, f"{table_name}.pt")
@@ -162,7 +160,7 @@ class NodeTrainTableInput(NamedTuple):
 def get_node_train_table_input(
     table: Table,
     task: NodeTask,
-    multilabel=False,
+    multilabel: bool = False,
 ) -> NodeTrainTableInput:
     nodes = torch.from_numpy(table.df[task.entity_col].astype(int).values)
 

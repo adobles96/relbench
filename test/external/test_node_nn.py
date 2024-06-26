@@ -42,15 +42,23 @@ def test_node_train_fake_product_dataset(tmp_path):
     x_dict = gnn(x_dict, data.edge_index_dict)
     x = head(x_dict["customer"])
 
-    assert len(x_dict) == 3
+    assert len(x_dict) == 4
     assert x_dict["customer"].size() == (100, 64)
     assert x_dict["review"].size() == (540, 64)
     assert x_dict["product"].size() == (30, 64)
     assert x.size() == (100, 1)
 
     # Ensure that neighbor loading works on train/val/test splits ############
-    task = dataset.get_task("rel-amazon-churn", process=True)
+    task = dataset.get_task("user-churn", process=True)
     assert task.task_type == TaskType.BINARY_CLASSIFICATION
+
+    stats = task.stats()
+    assert len(stats) == 3
+    assert len(stats["train"]) == 11
+    assert len(next(iter(stats["train"].values()))) == 4
+    assert len(stats["val"]) == 2
+    assert len(next(iter(stats["val"].values()))) == 4
+    assert len(stats["total"].values()) == 2
 
     loader_dict: Dict[str, NeighborLoader] = {}
     for split, table in [

@@ -17,7 +17,7 @@ def test_make_pkey_fkey_graph():
             batch_size=None,
         ),
     )
-    assert set(data.node_types) == {"customer", "review", "product"}
+    assert set(data.node_types) == {"customer", "review", "product", "relations"}
 
     data.validate()
 
@@ -30,7 +30,9 @@ def test_make_pkey_fkey_graph():
     assert data["product"].num_nodes == 30
     assert isinstance(data["product"].tf, TensorFrame)
 
-    assert len(data.edge_types) == 4
+    assert isinstance(data["relations"].tf, TensorFrame)
+
+    assert len(data.edge_types) == 8
     for edge_type in data.edge_types:
         src, _, dst = edge_type
 

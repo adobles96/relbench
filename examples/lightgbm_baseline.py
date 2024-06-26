@@ -1,4 +1,5 @@
 import argparse
+import os
 from typing import Dict
 
 import numpy as np
@@ -11,30 +12,39 @@ from torch_frame.config.text_embedder import TextEmbedderConfig
 from torch_frame.data import Dataset
 from torch_frame.gbdt import LightGBM
 from torch_frame.typing import Metric
-from torch_frame.utils import infer_df_stype
+from torch_geometric.seed import seed_everything
 from tqdm import tqdm
 
 from relbench.data import RelBenchDataset, RelBenchNodeTask
 from relbench.data.task_base import TaskType
 from relbench.datasets import get_dataset
+from relbench.external.utils import remove_pkey_fkey
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="rel-stackex")
-parser.add_argument("--task", type=str, default="rel-stackex-engage")
+parser.add_argument("--dataset", type=str, default="rel-stack")
+parser.add_argument("--task", type=str, default="user-engage")
 # Use auto-regressive label as hand-crafted feature as input to LightGBM
 parser.add_argument("--use_ar_label", action="store_true")
 parser.add_argument(
     "--sample_size",
     type=int,
-    default=50000,
+    default=50_000,
     help="Subsample the specified number of training data to train lightgbm model.",
+)
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument(
+    "--cache_dir",
+    type=str,
+    default=os.path.expanduser("~/.cache/relbench/materialized"),
 )
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    torch.set_num_threads(1)
+seed_everything(args.seed)
 
-# TODO: remove process=True once correct data/task is uploaded.
-dataset: RelBenchDataset = get_dataset(name=args.dataset, process=True)
+dataset: RelBenchDataset = get_dataset(name=args.dataset, process=False)
 task: RelBenchNodeTask = dataset.get_task(args.task, process=True)
 
 train_table = task.train_table
@@ -72,11 +82,7 @@ entity_table = dataset.db.table_dict[task.entity_table]
 entity_df = entity_table.df
 
 col_to_stype = dataset2inferred_stypes[args.dataset][task.entity_table]
-
-if entity_table.pkey_col is not None:
-    del col_to_stype[entity_table.pkey_col]
-for fkey_col in entity_table.fkey_col_to_pkey_table.keys():
-    del col_to_stype[fkey_col]
+remove_pkey_fkey(col_to_stype, entity_table)
 
 if task.task_type == TaskType.BINARY_CLASSIFICATION:
     col_to_stype[task.target_col] = torch_frame.categorical
@@ -120,7 +126,10 @@ train_dataset = Dataset(
         text_embedder=GloveTextEmbedding(device=device),
         batch_size=256,
     ),
-).materialize()
+)
+train_dataset = train_dataset.materialize(
+    path=os.path.join(args.cache_dir, f"{args.dataset}_{args.task}.pt")
+)
 
 tf_train = train_dataset.tensor_frame
 tf_val = train_dataset.convert_to_tensor_frame(dfs["val"])
@@ -133,19 +142,22 @@ if task.task_type in [
     tune_metric = Metric.ROCAUC
 elif task.task_type == TaskType.REGRESSION:
     tune_metric = Metric.MAE
+else:
+    raise ValueError(f"Task task type is unsupported {task.task_type}")
 
 if task.task_type in [TaskType.BINARY_CLASSIFICATION, TaskType.REGRESSION]:
     model = LightGBM(task_type=train_dataset.task_type, metric=tune_metric)
     model.tune(tf_train=tf_train, tf_val=tf_val, num_trials=10)
 
     pred = model.predict(tf_test=tf_train).numpy()
-    print(f"Train: {task.evaluate(pred, train_table)}")
+    train_metrics = task.evaluate(pred, train_table)
 
     pred = model.predict(tf_test=tf_val).numpy()
-    print(f"Val: {task.evaluate(pred, val_table)}")
+    val_metrics = task.evaluate(pred, val_table)
 
     pred = model.predict(tf_test=tf_test).numpy()
-    print(f"Test: {task.evaluate(pred)}")
+    test_metrics = task.evaluate(pred)
+
 elif TaskType.MULTILABEL_CLASSIFICATION:
     y_train = tf_train.y.values.to(torch.long)
     y_val = tf_val.y.values.to(torch.long)
@@ -163,9 +175,16 @@ elif TaskType.MULTILABEL_CLASSIFICATION:
         pred_train_list.append(model.predict(tf_test=tf_train).numpy())
         pred_val_list.append(model.predict(tf_test=tf_val).numpy())
         pred_test_list.append(model.predict(tf_test=tf_test).numpy())
+
     pred_train = np.stack(pred_train_list).transpose()
-    print(f"Train: {task.evaluate(pred_train, train_table)}")
+    train_metrics = task.evaluate(pred_train, train_table)
+
     pred_val = np.stack(pred_val_list).transpose()
-    print(f"Val: {task.evaluate(pred_val, val_table)}")
+    val_metrics = task.evaluate(pred_val, val_table)
+
     pred_test = np.stack(pred_test_list).transpose()
-    print(f"Test: {task.evaluate(pred_test)}")
+    test_metrics = task.evaluate(pred_test)
+
+print(f"Train: {train_metrics}")
+print(f"Val: {val_metrics}")
+print(f"Test: {test_metrics}")

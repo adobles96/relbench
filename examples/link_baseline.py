@@ -4,16 +4,21 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+from torch_geometric.seed import seed_everything
 
 from relbench.data import LinkTask, Table
 from relbench.datasets import get_dataset
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="rel-stackex")
-parser.add_argument("--task", type=str, default="rel-stackex-comment-on-post")
+parser.add_argument("--dataset", type=str, default="rel-stack")
+parser.add_argument("--task", type=str, default="user-post-comment")
+parser.add_argument("--seed", type=int, default=42)
 args = parser.parse_args()
 
-dataset = get_dataset(name=args.dataset, process=True)
+
+seed_everything(args.seed)
+
+dataset = get_dataset(name=args.dataset, process=False)
 task: LinkTask = dataset.get_task(args.task, process=True)
 
 train_table = task.train_table
