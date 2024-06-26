@@ -55,32 +55,17 @@ if args.use_ar_label:
             "Timestamps are not equally spaced, making it inappropriate for "
             "AR labels to be used."
         )
-    TIME_IDX_COL = "time_idx"
-    time_df = pd.DataFrame(
-        {
-            task.time_col: sorted_unique_times,
-            "time_idx": np.arange(len(sorted_unique_times)),
-        }
-    )
-
-    whole_df = whole_df.merge(time_df, how="left", on=task.time_col)
-    whole_df.drop(task.time_col, axis=1, inplace=True)
-    # Shift timestamp of whole_df iteratively and join it with train/val/test_table
+    whole_df = whole_df.sort_values(by=[task.entity_col, task.time_col])
     for i in range(1, num_ar_labels + 1):
-        whole_df_shifted = whole_df.copy(deep=True)
-        # Shift time index by i
-        whole_df_shifted[TIME_IDX_COL] += i
-        # Map time index back to datetime timestamp
-        whole_df_shifted = whole_df_shifted.merge(time_df, how="inner", on=TIME_IDX_COL)
-        whole_df_shifted.drop(TIME_IDX_COL, axis=1, inplace=True)
         ar_label = f"AR_{i}"
         ar_label_cols.append(ar_label)
-        whole_df_shifted.rename(columns={task.target_col: ar_label}, inplace=True)
-
-        for table in [train_table, val_table, test_table]:
-            table.df = table.df.merge(
-                whole_df_shifted, how="left", on=(task.entity_col, task.time_col)
-            )
+        whole_df[ar_label] = whole_df.groupby(task.entity_col)[task.target_col].shift(i)
+    for table in [train_table, val_table, test_table]:
+        table.df = table.df.merge(
+            whole_df[[task.entity_col, task.time_col] + ar_label_cols],
+            how="left",
+            on=(task.entity_col, task.time_col)
+        )
 
 dfs: Dict[str, pd.DataFrame] = {}
 entity_table = dataset.db.table_dict[task.entity_table]
