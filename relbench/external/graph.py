@@ -1,5 +1,7 @@
+from itertools import permutations
 import os
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple, List
+
 
 import numpy as np
 import pandas as pd
@@ -36,6 +38,105 @@ def get_stype_proposal(db: Database) -> Dict[str, Dict[str, Any]]:
         inferred_col_to_stype_dict[table_name] = inferred_col_to_stype
 
     return inferred_col_to_stype_dict
+
+
+def make_fact_dimension_graph(
+    db: Database,
+    fact_tables: List[str],
+    dimension_tables: List[str],
+    col_to_stype_dict: Dict[str, Dict[str, stype]],
+    text_embedder_cfg: Optional[TextEmbedderConfig] = None,
+    cache_dir: Optional[str] = None,
+) -> Tuple[HeteroData, Dict[str, Dict[str, Dict[StatType, Any]]]]:
+    data = HeteroData()  # Maybe use TemporalData ?
+    col_stats_dict = dict()
+    if cache_dir is not None:
+        os.makedirs(cache_dir, exist_ok=True)
+
+    for table_name in dimension_tables:
+        table = db.table_dict[table_name]
+        df = table.df
+        if table.pkey_col is not None:
+            assert (df[table.pkey_col].values == np.arange(len(df))).all()
+
+        col_to_stype = col_to_stype_dict[table_name]
+
+        # Remove pkey, fkey columns since they will not be used as input
+        # feature.
+        remove_pkey_fkey(col_to_stype, table)
+
+        if len(col_to_stype) == 0:  # Add constant feature in case df is empty:
+            col_to_stype = {"__const__": stype.numerical}
+            # We need to add edges later, so we need to also keep the fkeys
+            fkey_dict = {key: df[key] for key in table.fkey_col_to_pkey_table}
+            df = pd.DataFrame({"__const__": np.ones(len(table.df)), **fkey_dict})
+
+        path = (
+            None if cache_dir is None else os.path.join(cache_dir, f"{table_name}.pt")
+        )
+
+        dataset = Dataset(
+            df=df,
+            col_to_stype=col_to_stype,
+            col_to_text_embedder_cfg=text_embedder_cfg,
+        ).materialize(path=path)
+
+        data[table_name].tf = dataset.tensor_frame
+        col_stats_dict[table_name] = dataset.col_stats
+
+        # Add time attribute:
+        if table.time_col is not None:
+            data[table_name].time = torch.from_numpy(
+                to_unix_time(table.df[table.time_col])
+            )
+        # TODO I have to add fkey edges here (eg from badges to users in stack overflow).
+        # Otherwise, there is nothing linking those entities.
+
+    for table_name in fact_tables:  # aka "event" tables
+        table = db.table_dict[table_name]
+        df = table.df
+        times = df[table.time_col]
+        # attrs: drop time, pkey, fkeys and make sure to align with mask
+        attrs = df.drop(
+            columns=[table.time_col, table.pkey_col, *table.fkey_col_to_pkey_table.keys()]
+        )
+
+        # Add edges
+        for (fkey1, fkey2) in permutations(table.fkey_col_to_pkey_table.keys(), 2):
+            # draw edge between src and dst with appropriate timestamp?
+            fkey1_table_name = table.fkey_col_to_pkey_table[fkey1]
+            fkey2_table_name = table.fkey_col_to_pkey_table[fkey2]
+            fkey1_index = df[fkey1]
+            fkey2_index = df[fkey2]
+
+            # Filter dangling foregin keys
+            mask = ~fkey1_index.isna() & ~fkey2_index.isna()
+            fkey1_index = torch.from_numpy(fkey1_index[mask].astype(int).values)
+            fkey2_index = torch.from_numpy(fkey2_index[mask].astype(int).values)
+            times = torch.from_numpy(to_unix_time(times[mask]))
+            attrs = torch.from_numpy(attrs[mask])
+            assert (fkey1_index < len(db.table_dict[fkey1_table_name])).all()
+            assert (fkey2_index < len(db.table_dict[fkey2_table_name])).all()
+
+            # 1 --> 2
+            edge_index = torch.stack([fkey1_index, fkey2_index], dim=0)
+            edge_type = (table_name, fkey1_table_name, fkey2_table_name)
+            # TODO sort edges by time to speed up loader
+            data[edge_type].edge_index = edge_index
+            # WARNING may need to change attr name
+            data[edge_type].time = times
+            data[edge_type].edge_attr = attrs
+
+            # 2 --> 1
+            edge_index = torch.stack([fkey2_index, fkey1_index], dim=0)
+            edge_type = (table_name, fkey2_table_name, fkey1_table_name)
+            data[edge_type].edge_index = edge_index
+            # WARNING may need to change attr name
+            data[edge_type].time = times
+            data[edge_type].edge_attr = attrs
+
+    data.validate()
+    return data, col_stats_dict
 
 
 def make_pkey_fkey_graph(
