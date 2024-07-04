@@ -1,4 +1,4 @@
-from itertools import permutations
+from itertools import combinations
 import os
 from typing import Any, Dict, NamedTuple, Optional, Tuple, List
 
@@ -98,11 +98,16 @@ def make_fact_dimension_graph(
         times = df[table.time_col]
         # attrs: drop time, pkey, fkeys and make sure to align with mask
         attrs = df.drop(
-            columns=[table.time_col, table.pkey_col, *table.fkey_col_to_pkey_table.keys()]
+            columns=list(
+                filter(
+                    lambda x: x is not None,
+                    [table.time_col, table.pkey_col, *table.fkey_col_to_pkey_table.keys()]
+                )
+            )
         )
 
         # Add edges
-        for (fkey1, fkey2) in permutations(table.fkey_col_to_pkey_table.keys(), 2):
+        for (fkey1, fkey2) in combinations(table.fkey_col_to_pkey_table.keys(), 2):
             # draw edge between src and dst with appropriate timestamp?
             fkey1_table_name = table.fkey_col_to_pkey_table[fkey1]
             fkey2_table_name = table.fkey_col_to_pkey_table[fkey2]
@@ -113,27 +118,28 @@ def make_fact_dimension_graph(
             mask = ~fkey1_index.isna() & ~fkey2_index.isna()
             fkey1_index = torch.from_numpy(fkey1_index[mask].astype(int).values)
             fkey2_index = torch.from_numpy(fkey2_index[mask].astype(int).values)
-            times = torch.from_numpy(to_unix_time(times[mask]))
-            attrs = torch.from_numpy(attrs[mask])
+            masked_times = torch.from_numpy(to_unix_time(times[mask]))
+            masked_attrs = torch.from_numpy(attrs[mask].values)
             assert (fkey1_index < len(db.table_dict[fkey1_table_name])).all()
             assert (fkey2_index < len(db.table_dict[fkey2_table_name])).all()
 
             # 1 --> 2
             edge_index = torch.stack([fkey1_index, fkey2_index], dim=0)
-            edge_type = (table_name, fkey1_table_name, fkey2_table_name)
+            # WARNING may need different edge type names for 1->2 and 2->1
+            edge_type = (fkey1_table_name, f"{table_name}_edge", fkey2_table_name)
             # TODO sort edges by time to speed up loader
             data[edge_type].edge_index = edge_index
             # WARNING may need to change attr name
-            data[edge_type].time = times
-            data[edge_type].edge_attr = attrs
+            data[edge_type].time = masked_times
+            data[edge_type].edge_attr = masked_attrs
 
             # 2 --> 1
             edge_index = torch.stack([fkey2_index, fkey1_index], dim=0)
-            edge_type = (table_name, fkey2_table_name, fkey1_table_name)
+            edge_type = (fkey2_table_name, f"{table_name}_edge", fkey1_table_name)
             data[edge_type].edge_index = edge_index
             # WARNING may need to change attr name
-            data[edge_type].time = times
-            data[edge_type].edge_attr = attrs
+            data[edge_type].time = masked_times
+            data[edge_type].edge_attr = masked_attrs
 
     data.validate()
     return data, col_stats_dict
