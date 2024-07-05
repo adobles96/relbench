@@ -182,7 +182,7 @@ if __name__ == "__main__":
             num_neighbors=[int(args.num_neighbors / 2**i) for i in range(args.num_layers)],
             time_attr="time",
             input_nodes=table_input.nodes,
-            # input_time=table_input.time,  # overrides time_attr
+            input_time=table_input.time,
             transform=table_input.transform,
             batch_size=args.batch_size,
             temporal_strategy=args.temporal_strategy,
