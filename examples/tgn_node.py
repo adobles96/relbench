@@ -1,5 +1,6 @@
 import argparse
 import copy
+from functools import reduce
 import math
 import os
 from typing import Dict
@@ -7,7 +8,7 @@ from typing import Dict
 import numpy as np
 import torch
 from inferred_stypes import dataset2inferred_stypes
-from model import Model
+from tgn_model import Model
 from text_embedder import GloveTextEmbedding
 from torch.nn import BCEWithLogitsLoss, L1Loss
 from torch_frame.config.text_embedder import TextEmbedderConfig
@@ -39,7 +40,7 @@ parser.add_argument("--lr", type=float, default=0.005)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--batch_size", type=int, default=512)
 parser.add_argument("--channels", type=int, default=128)
-parser.add_argument("--aggr", type=str, default="sum")
+parser.add_argument("--heads", type=int, default=1)
 parser.add_argument("--num_layers", type=int, default=2)
 parser.add_argument("--num_neighbors", type=int, default=128)
 parser.add_argument("--temporal_strategy", type=str, default="last")  # changed from "uniform"
@@ -108,6 +109,11 @@ def test(loader: NeighborLoader) -> np.ndarray:
         pred = pred.view(-1) if pred.size(1) == 1 else pred
         pred_list.append(pred.detach().cpu())
     return torch.cat(pred_list, dim=0).numpy()
+
+
+def param_count(model: torch.nn.Module) -> int:
+    """ Returns the parameter count of a torch.nn.Module """
+    return sum((reduce(lambda x, y: x * y, p.size()) for p in model.parameters()))
 
 
 if __name__ == "__main__":
@@ -197,9 +203,10 @@ if __name__ == "__main__":
         num_layers=args.num_layers,
         channels=args.channels,
         out_channels=out_channels,
-        aggr=args.aggr,
         norm="batch_norm",
+        attn_heads=args.heads,
     ).to(device)
+    print(f"Initialized model with {param_count(model):,} parameters.")
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     state_dict = None
     best_val_metric = -math.inf if higher_is_better else math.inf
