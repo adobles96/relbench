@@ -57,24 +57,26 @@ class HeteroGraphGAT(torch.nn.Module):
     def __init__(
         self,
         node_types: List[NodeType],
-        edge_types: List[EdgeType],
+        num_edge_features: Dict[str, int],
         channels: int,
-        edge_dim: int,
-        heads: int = 8,
+        heads: int = 1,
         num_layers: int = 2,
         dropout: float = 0.2
     ):
         super().__init__()
 
         self.convs = torch.nn.ModuleList()
+        assert channels % heads == 0, "channels should be divisible by heads"
         for _ in range(num_layers):
             conv = HeteroConv(
                 {
+                    # NOTE: output has size (num_nodes, channels * heads) so if heads > 1
+                    # then either set out_channels channels/heads or use MLP to downscale channels
                     edge_type: GATConv(
-                        (channels, channels), channels, heads=heads, edge_dim=edge_dim,
-                        dropout=dropout
+                        (channels, channels), channels // heads, heads=heads, dropout=dropout,
+                        edge_dim=edge_dim, add_self_loops=False
                     )
-                    for edge_type in edge_types
+                    for edge_type, edge_dim in num_edge_features.items()
                 },
                 aggr="sum",
             )
@@ -98,6 +100,7 @@ class HeteroGraphGAT(torch.nn.Module):
         self,
         x_dict: Dict[NodeType, Tensor],
         edge_index_dict: Dict[NodeType, Tensor],
+        edge_attr_dict: Dict[EdgeType, Tensor],
         num_sampled_nodes_dict: Optional[Dict[NodeType, List[int]]] = None,
         num_sampled_edges_dict: Optional[Dict[EdgeType, List[int]]] = None,
     ) -> Dict[NodeType, Tensor]:
@@ -115,7 +118,7 @@ class HeteroGraphGAT(torch.nn.Module):
             #         x=x_dict,
             #         edge_index=edge_index_dict,
             #     )
-            x_dict = conv(x_dict, edge_index_dict)
+            x_dict = conv(x_dict, edge_index_dict, edge_attr_dict=edge_attr_dict)
             x_dict = {key: norm_dict[key](x) for key, x in x_dict.items()}
             x_dict = {key: x.relu() for key, x in x_dict.items()}
 
@@ -131,9 +134,8 @@ class Model(torch.nn.Module):
         num_layers: int,
         channels: int,
         out_channels: int,
-        aggr: str,
         norm: str,
-        edge_type_embed_dim: int = 16,
+        attn_heads: int = 1,
         # List of node types to add shallow embeddings to input
         shallow_list: List[NodeType] = [],
         # ID awareness
@@ -141,6 +143,8 @@ class Model(torch.nn.Module):
     ):
         super().__init__()
 
+        # TODO consider adding an encoder for edge attributes; requires setting tf attr in
+        # make_fact_dimension_graph
         self.encoder = HeteroEncoder(
             channels=channels,
             node_to_col_names_dict={
@@ -149,24 +153,21 @@ class Model(torch.nn.Module):
             },
             node_to_col_stats=col_stats_dict,
         )
-        self.edge_type_embeddings = Embedding(
-            len(data.edge_types), embedding_dim=edge_type_embed_dim
-        )
         # TODO will have to add temporal_node_encoder for when edges don't have timestamps
         # directly? Alternatively for pkey->fkey edges make the edge have the timestamp.
-        self.temporal_edge_encoder = HeteroTemporalEncoder(
-            # overloading the argument name -- really edge_types here
-            node_types=[
-                edge_type for edge_type in data.edge_types if "time" in data[edge_type]
-            ],
-            channels=channels,
-        )
+        # self.temporal_edge_encoder = HeteroTemporalEncoder(
+        #     # overloading the argument name -- really edge_types here
+        #     node_types=[
+        #         edge_type for edge_type in data.edge_types if "time" in data[edge_type]
+        #     ],
+        #     channels=channels,
+        # )
         self.gnn = HeteroGraphGAT(
             node_types=data.node_types,
-            edge_types=data.edge_types,
+            num_edge_features=data.num_edge_features,
             channels=channels,
-            aggr=aggr,
             num_layers=num_layers,
+            heads=attn_heads,
         )
         self.head = MLP(
             channels,
@@ -188,7 +189,7 @@ class Model(torch.nn.Module):
 
     def reset_parameters(self):
         self.encoder.reset_parameters()
-        self.temporal_edge_encoder.reset_parameters()
+        # self.temporal_edge_encoder.reset_parameters()
         self.gnn.reset_parameters()
         self.head.reset_parameters()
         for embedding in self.embedding_dict.values():
@@ -205,9 +206,9 @@ class Model(torch.nn.Module):
         x_dict = self.encoder(batch.tf_dict)
         
         # TODO use edge attrs for training and add this temporal embedding!
-        rel_time_dict = self.temporal_edge_encoder(
-            seed_time, batch.time_dict, batch.batch_dict
-        )
+        # rel_time_dict = self.temporal_edge_encoder(
+        #     seed_time, batch.time_dict, batch.batch_dict
+        # )
 
         # for node_type, rel_time in rel_time_dict.items():
         #     x_dict[node_type] = x_dict[node_type] + rel_time
@@ -219,6 +220,7 @@ class Model(torch.nn.Module):
         x_dict = self.gnn(
             x_dict,
             batch.edge_index_dict,
+            batch.edge_attr_dict,
             batch.num_sampled_nodes_dict,
             batch.num_sampled_edges_dict,
         )
