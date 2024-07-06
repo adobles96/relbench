@@ -106,6 +106,9 @@ def make_fact_dimension_graph(
             )
         )
 
+        # TODO consider adding tf attribute to data[table_name] (as in dimension tables above)
+        # in order to use edge_attribute encodings w/ ResNet.
+
         # Add edges
         for (fkey1, fkey2) in combinations(table.fkey_col_to_pkey_table.keys(), 2):
             # draw edge between src and dst with appropriate timestamp?
@@ -119,7 +122,7 @@ def make_fact_dimension_graph(
             fkey1_index = torch.from_numpy(fkey1_index[mask].astype(int).values)
             fkey2_index = torch.from_numpy(fkey2_index[mask].astype(int).values)
             masked_times = torch.from_numpy(to_unix_time(times[mask]))
-            masked_attrs = torch.from_numpy(attrs[mask].values)
+            masked_attrs = torch.from_numpy(attrs[mask].values).float()
             assert (fkey1_index < len(db.table_dict[fkey1_table_name])).all()
             assert (fkey2_index < len(db.table_dict[fkey2_table_name])).all()
 
