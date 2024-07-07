@@ -12,15 +12,18 @@ from relbench.external.nn import HeteroEncoder, HeteroGraphSAGE, HeteroTemporalE
 
 
 class HeteroTemporalEdgeEncoder(torch.nn.Module):
-    def __init__(self, edge_types: List[EdgeType], channels: int):
+    def __init__(self, num_edge_features: Dict[EdgeType, int]):
         super().__init__()
 
-        self.encoder_dict = torch.nn.ModuleDict(
-            {edge_type: PositionalEncoding(channels) for edge_type in edge_types}
-        )
-        self.lin_dict = torch.nn.ModuleDict(
-            {edge_type: torch.nn.Linear(channels, channels) for edge_type in edge_types}
-        )
+        # TODO modify to use fixed channel size once you implement edge feature encoder
+        self.encoder_dict = torch.nn.ModuleDict({
+            edge_type: PositionalEncoding(n_feats)
+            for edge_type, n_feats in num_edge_features.items()
+        })
+        self.lin_dict = torch.nn.ModuleDict({
+            edge_type: torch.nn.Linear(n_feats, n_feats)
+            for edge_type, n_feats in num_edge_features.items()
+        })
 
     def reset_parameters(self):
         for encoder in self.encoder_dict.values():
@@ -153,15 +156,16 @@ class Model(torch.nn.Module):
             },
             node_to_col_stats=col_stats_dict,
         )
-        # TODO will have to add temporal_node_encoder for when edges don't have timestamps
-        # directly? Alternatively for pkey->fkey edges make the edge have the timestamp.
-        # self.temporal_edge_encoder = HeteroTemporalEncoder(
-        #     # overloading the argument name -- really edge_types here
+        # TODO add this back. See below.
+        # self.node_temporal_encoder = HeteroTemporalEncoder(
         #     node_types=[
-        #         edge_type for edge_type in data.edge_types if "time" in data[edge_type]
+        #         node_type for node_type in data.node_types if "time" in data[node_type]
         #     ],
         #     channels=channels,
         # )
+        self.edge_temporal_encoder = HeteroTemporalEdgeEncoder(
+            {e: n for e, n in data.num_edge_features.items() if "time" in data[e]}
+        )
         self.gnn = HeteroGraphGAT(
             node_types=data.node_types,
             num_edge_features=data.num_edge_features,
@@ -204,14 +208,18 @@ class Model(torch.nn.Module):
     ) -> Tensor:
         seed_time = batch[entity_table].seed_time
         x_dict = self.encoder(batch.tf_dict)
-        
-        # TODO use edge attrs for training and add this temporal embedding!
-        # rel_time_dict = self.temporal_edge_encoder(
-        #     seed_time, batch.time_dict, batch.batch_dict
-        # )
+        edge_attr_dict = batch.edge_attr_dict
 
-        # for node_type, rel_time in rel_time_dict.items():
+        # TODO add this back. Need node_types to appear in batch.time_dict.
+        # for node_type, rel_time in self.node_temporal_encoder(
+        #     seed_time, batch.time_dict, batch.batch_dict
+        # ).items():
         #     x_dict[node_type] = x_dict[node_type] + rel_time
+
+        for edge_type, rel_time in self.edge_temporal_encoder(
+            seed_time, batch.time_dict, batch.batch_dict, batch.edge_index_dict
+        ).items():
+            edge_attr_dict[edge_type] = edge_attr_dict[edge_type] + rel_time
 
         # Won't use: ignore.
         for node_type, embedding in self.embedding_dict.items():
