@@ -17,11 +17,11 @@ class HeteroTemporalEdgeEncoder(torch.nn.Module):
 
         # TODO modify to use fixed channel size once you implement edge feature encoder
         self.encoder_dict = torch.nn.ModuleDict({
-            edge_type: PositionalEncoding(n_feats)
+            str(edge_type): PositionalEncoding(n_feats)
             for edge_type, n_feats in num_edge_features.items()
         })
         self.lin_dict = torch.nn.ModuleDict({
-            edge_type: torch.nn.Linear(n_feats, n_feats)
+            str(edge_type): torch.nn.Linear(n_feats, n_feats)
             for edge_type, n_feats in num_edge_features.items()
         })
 
@@ -37,8 +37,8 @@ class HeteroTemporalEdgeEncoder(torch.nn.Module):
         time_dict: Dict[EdgeType, Tensor],
         batch_dict: Dict[NodeType, Tensor],
         edge_index_dict: Dict[EdgeType, Tensor]
-    ) -> Dict[NodeType, Tensor]:
-        out_dict: Dict[NodeType, Tensor] = {}
+    ) -> Dict[EdgeType, Tensor]:
+        out_dict: Dict[EdgeType, Tensor] = {}
 
         for edge_type, time in time_dict.items():
             node_type_src = edge_type[0]
@@ -48,8 +48,8 @@ class HeteroTemporalEdgeEncoder(torch.nn.Module):
             rel_time = seed_time[batch_dict[node_type_src][src_node_indices]] - time
             rel_time = rel_time / (60 * 60 * 24)  # Convert seconds to days.
 
-            x = self.encoder_dict[edge_type](rel_time)
-            x = self.lin_dict[edge_type](x)
+            x = self.encoder_dict[str(edge_type)](rel_time)
+            x = self.lin_dict[str(edge_type)](x)
             out_dict[edge_type] = x
 
         return out_dict
