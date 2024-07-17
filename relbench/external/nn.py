@@ -81,8 +81,11 @@ class HeteroEncoder(torch.nn.Module):
         self,
         tf_dict: Dict[NodeType, torch_frame.TensorFrame],
     ) -> Dict[NodeType, Tensor]:
+        # HACK
         x_dict = {
-            node_type: self.encoders[node_type](tf) for node_type, tf in tf_dict.items()
+            k: self.encoders[str(k)](tf_dict[k])
+            for k in tf_dict.keys()
+            if str(k) in self.encoders.keys()
         }
         return x_dict
 

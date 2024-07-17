@@ -8,7 +8,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.nn import MLP, PositionalEncoding, HeteroConv, GATConv, LayerNorm
 from torch_geometric.typing import NodeType, EdgeType
 
-from relbench.external.nn import HeteroEncoder, HeteroGraphSAGE, HeteroTemporalEncoder
+from relbench.external.nn import HeteroEncoder, HeteroTemporalEncoder
 
 
 class HeteroTemporalEdgeEncoder(torch.nn.Module):
@@ -136,6 +136,7 @@ class Model(torch.nn.Module):
         col_stats_dict: Dict[str, Dict[str, Dict[StatType, Any]]],
         num_layers: int,
         channels: int,
+        edge_channels: int,
         out_channels: int,
         norm: str,
         attn_heads: int = 1,
@@ -148,27 +149,41 @@ class Model(torch.nn.Module):
 
         # TODO consider adding an encoder for edge attributes; requires setting tf attr in
         # make_fact_dimension_graph
-        self.encoder = HeteroEncoder(
+        self.node_encoder = HeteroEncoder(
             channels=channels,
             node_to_col_names_dict={
-                node_type: data[node_type].tf.col_names_dict
-                for node_type in data.node_types
+                node_type: data[node_type].tf.col_names_dict for node_type in data.node_types
             },
-            node_to_col_stats=col_stats_dict,
+            node_to_col_stats={
+                node_type: col_stats_dict[node_type] for node_type in data.node_types
+            },
         )
-        # TODO add this back. See below.
-        # self.node_temporal_encoder = HeteroTemporalEncoder(
-        #     node_types=[
-        #         node_type for node_type in data.node_types if "time" in data[node_type]
-        #     ],
-        #     channels=channels,
-        # )
-        self.edge_temporal_encoder = HeteroTemporalEdgeEncoder(
-            {e: n for e, n in data.num_edge_features.items() if "time" in data[e]}
+        self.edge_encoder = HeteroEncoder(
+            channels=edge_channels,
+            node_to_col_names_dict={
+                    str(edge_type): data[edge_type].tf.col_names_dict
+                    for edge_type in data.edge_types
+            },
+            node_to_col_stats={
+                str(edge_type): col_stats_dict[edge_type] for edge_type in data.edge_types
+            },
         )
+        nodes_w_time = [node_type for node_type in data.node_types if "time" in data[node_type]]
+        if len(nodes_w_time) > 0:
+            self.node_temporal_encoder = HeteroTemporalEncoder(
+                node_types=nodes_w_time,
+                channels=channels,
+            )
+        else:
+            self.node_temporal_encoder = None
+        edges_w_time = {e: edge_channels for e in data.edge_types if "time" in data[e]}
+        if len(edges_w_time) > 0:
+            self.edge_temporal_encoder = HeteroTemporalEdgeEncoder(edges_w_time)
+        else:
+            self.edge_temporal_encoder = None
         self.gnn = HeteroGraphGAT(
             node_types=data.node_types,
-            num_edge_features=data.num_edge_features,
+            num_edge_features={e: edge_channels for e in data.edge_types},
             channels=channels,
             num_layers=num_layers,
             heads=attn_heads,
@@ -192,8 +207,12 @@ class Model(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.encoder.reset_parameters()
-        # self.temporal_edge_encoder.reset_parameters()
+        self.node_encoder.reset_parameters()
+        self.edge_encoder.reset_parameters()
+        if self.edge_temporal_encoder is not None:
+            self.edge_temporal_encoder.reset_parameters()
+        if self.node_temporal_encoder is not None:
+            self.node_temporal_encoder.reset_parameters()
         self.gnn.reset_parameters()
         self.head.reset_parameters()
         for embedding in self.embedding_dict.values():
@@ -207,19 +226,24 @@ class Model(torch.nn.Module):
         entity_table: NodeType,
     ) -> Tensor:
         seed_time = batch[entity_table].seed_time
-        x_dict = self.encoder(batch.tf_dict)
-        edge_attr_dict = batch.edge_attr_dict
+        node_encodings = self.node_encoder(batch.tf_dict)
+        edge_encodings = self.edge_encoder(batch.tf_dict)
+        # edge_attr_dict = batch.edge_attr_dict
 
-        # TODO add this back. Need node_types to appear in batch.time_dict.
-        # for node_type, rel_time in self.node_temporal_encoder(
-        #     seed_time, batch.time_dict, batch.batch_dict
-        # ).items():
-        #     x_dict[node_type] = x_dict[node_type] + rel_time
+        edge_attrs = {edge_type: edge_encodings[edge_type] for edge_type in batch.edge_types}
+        x_dict = {node_type: node_encodings[node_type] for node_type in batch.node_types}
 
-        for edge_type, rel_time in self.edge_temporal_encoder(
-            seed_time, batch.time_dict, batch.batch_dict, batch.edge_index_dict
-        ).items():
-            edge_attr_dict[edge_type] = edge_attr_dict[edge_type] + rel_time
+        if self.node_temporal_encoder is not None:
+            for node_type, rel_time in self.node_temporal_encoder(
+                seed_time, batch.time_dict, batch.batch_dict
+            ).items():
+                x_dict[node_type] = x_dict[node_type] + rel_time
+        
+        if self.edge_temporal_encoder is not None:
+            for edge_type, rel_time in self.edge_temporal_encoder(
+                seed_time, batch.time_dict, batch.batch_dict, batch.edge_index_dict
+            ).items():
+                edge_attrs[edge_type] = edge_attrs[edge_type] + rel_time
 
         # Won't use: ignore.
         for node_type, embedding in self.embedding_dict.items():
@@ -228,7 +252,7 @@ class Model(torch.nn.Module):
         x_dict = self.gnn(
             x_dict,
             batch.edge_index_dict,
-            batch.edge_attr_dict,
+            edge_attrs,
             batch.num_sampled_nodes_dict,
             batch.num_sampled_edges_dict,
         )
@@ -250,7 +274,7 @@ class Model(torch.nn.Module):
         # Add ID-awareness to the root node
         x_dict[entity_table][: seed_time.size(0)] += self.id_awareness_emb.weight
 
-        rel_time_dict = self.temporal_edge_encoder(
+        rel_time_dict = self.edge_temporal_encoder(
             seed_time, batch.time_dict, batch.batch_dict
         )
 

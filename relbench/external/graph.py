@@ -48,7 +48,7 @@ def make_fact_dimension_graph(
     text_embedder_cfg: Optional[TextEmbedderConfig] = None,
     cache_dir: Optional[str] = None,
 ) -> Tuple[HeteroData, Dict[str, Dict[str, Dict[StatType, Any]]]]:
-    data = HeteroData()  # Maybe use TemporalData ?
+    data = HeteroData()
     col_stats_dict = dict()
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
@@ -97,6 +97,7 @@ def make_fact_dimension_graph(
         df = table.df
         times = df[table.time_col]
         # attrs: drop time, pkey, fkeys and make sure to align with mask
+        # TODO drop nulls in fkeys to avoid dangling keys -- faster than to mask later.
         attrs = df.drop(
             columns=list(
                 filter(
@@ -106,8 +107,16 @@ def make_fact_dimension_graph(
             )
         )
 
-        # TODO consider adding tf attribute to data[table_name] (as in dimension tables above)
-        # in order to use edge_attribute encodings w/ ResNet.
+        path = (
+            None if cache_dir is None else os.path.join(cache_dir, f"{table_name}.pt")
+        )
+        col_to_stype = col_to_stype_dict[table_name]
+        dataset = Dataset(
+            df=attrs,
+            col_to_stype={col: col_to_stype[col] for col in attrs.columns},
+            col_to_text_embedder_cfg=text_embedder_cfg,
+        ).materialize(path=path)
+
 
         # Add edges
         for (fkey1, fkey2) in combinations(table.fkey_col_to_pkey_table.keys(), 2):
@@ -122,7 +131,7 @@ def make_fact_dimension_graph(
             fkey1_index = torch.from_numpy(fkey1_index[mask].astype(int).values)
             fkey2_index = torch.from_numpy(fkey2_index[mask].astype(int).values)
             masked_times = torch.from_numpy(to_unix_time(times[mask]))
-            masked_attrs = torch.from_numpy(attrs[mask].values).float()
+            # masked_attrs = torch.from_numpy(attrs[mask].values).float()  # do I need this?
             assert (fkey1_index < len(db.table_dict[fkey1_table_name])).all()
             assert (fkey2_index < len(db.table_dict[fkey2_table_name])).all()
 
@@ -134,7 +143,9 @@ def make_fact_dimension_graph(
             data[edge_type].edge_index = edge_index
             # WARNING may need to change attr name
             data[edge_type].time = masked_times
-            data[edge_type].edge_attr = masked_attrs
+            # data[edge_type].edge_attr = masked_attrs  # do I need this?
+            data[edge_type].tf = dataset.tensor_frame[mask]  # super slow 🐌
+            col_stats_dict[edge_type] = dataset.col_stats
 
             # 2 --> 1
             edge_index = torch.stack([fkey2_index, fkey1_index], dim=0)
@@ -142,7 +153,9 @@ def make_fact_dimension_graph(
             data[edge_type].edge_index = edge_index
             # WARNING may need to change attr name
             data[edge_type].time = masked_times
-            data[edge_type].edge_attr = masked_attrs
+            data[edge_type].tf = dataset.tensor_frame[mask]  # super slow 🐌
+            # data[edge_type].edge_attr = masked_attrs
+            col_stats_dict[edge_type] = dataset.col_stats
 
     data.validate()
     return data, col_stats_dict

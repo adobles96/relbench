@@ -36,10 +36,11 @@ DIMENSION_TABLES = {
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", type=str, default="rel-event")
 parser.add_argument("--task", type=str, default="user-attendance")
-parser.add_argument("--lr", type=float, default=0.005)
+parser.add_argument("--lr", type=float, default=3e-4)
 parser.add_argument("--epochs", type=int, default=10)
-parser.add_argument("--batch_size", type=int, default=128)
+parser.add_argument("--batch_size", type=int, default=512)
 parser.add_argument("--channels", type=int, default=128)
+parser.add_argument("--edge_channels", type=int, default=128)
 parser.add_argument("--heads", type=int, default=4)
 parser.add_argument("--num_layers", type=int, default=2)
 parser.add_argument("--num_neighbors", type=int, default=128)
@@ -119,6 +120,7 @@ def param_count(model: torch.nn.Module) -> int:
 if __name__ == "__main__":
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f'Training on {device}')
     if torch.cuda.is_available():
         torch.set_num_threads(1)
     seed_everything(args.seed)
@@ -128,14 +130,6 @@ if __name__ == "__main__":
 
     col_to_stype_dict = dataset2inferred_stypes[args.dataset]
 
-    # data, col_stats_dict = make_pkey_fkey_graph(
-    #     dataset.db,
-    #     col_to_stype_dict=col_to_stype_dict,
-    #     text_embedder_cfg=TextEmbedderConfig(
-    #         text_embedder=GloveTextEmbedding(device=device), batch_size=256
-    #     ),
-    #     cache_dir=os.path.join(args.cache_dir, args.dataset),
-    # )
     data, col_stats_dict = make_fact_dimension_graph(
         dataset.db,
         fact_tables=FACT_TABLES[args.dataset],
@@ -202,12 +196,15 @@ if __name__ == "__main__":
         col_stats_dict=col_stats_dict,
         num_layers=args.num_layers,
         channels=args.channels,
+        edge_channels=args.edge_channels,
         out_channels=out_channels,
         norm="batch_norm",
         attn_heads=args.heads,
     ).to(device)
     print(f"Initialized model with {param_count(model):,} parameters.")
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    model = torch.compile(model)
+    print('Model compiled.')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     state_dict = None
     best_val_metric = -math.inf if higher_is_better else math.inf
     for epoch in range(1, args.epochs + 1):
