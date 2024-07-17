@@ -3,50 +3,30 @@ import os
 import pandas as pd
 import pooch
 
-from relbench.data import Database, RelBenchDataset, Table
-from relbench.tasks.avito import (
-    AdsClicksTask,
-    UserAdVisitTask,
-    UserClicksTask,
-    UserVisitsTask,
-)
+from relbench.base import Database, Dataset, Table
 from relbench.utils import clean_datetime, unzip_processor
 
 
-class AvitoDataset(RelBenchDataset):
-    name = "rel-avito"
-    url = "https://www.kaggle.com/competitions/avito-context-ad-clicks"
-    err_msg = (
-        "{data} not found. Please download avito data from "
-        "'{url}' and move it to '{path}'."
-    )
+class AvitoDataset(Dataset):
+    """Original data source:
+    https://www.kaggle.com/competitions/avito-context-ad-clicks"""
 
     # search stream ranges from 2015-04-25 to 2015-05-20
-    train_start_timestamp = pd.Timestamp("2015-04-25")
     val_timestamp = pd.Timestamp("2015-05-08")
     test_timestamp = pd.Timestamp("2015-05-14")
-    max_eval_time_frames = 1
-    task_cls_list = [AdsClicksTask, UserVisitsTask, UserAdVisitTask, UserClicksTask]
-
-    def __init__(
-        self,
-        *,
-        process: bool = False,
-    ):
-        self.name = f"{self.name}"
-        super().__init__(process=process)
 
     def make_db(self) -> Database:
+        # subsampled version of the original dataset
         # Customize path as necessary
         r"""Process the raw files into a database."""
-        url = "https://relbench.stanford.edu/data/rel-avito-raw.zip"
+        url = "https://relbench.stanford.edu/data/rel-avito-raw-100k.zip"
         path = pooch.retrieve(
             url,
-            known_hash="24ae408ee546cf9171742288d1ec6c52e60d332dd47f58eb78fabc64a3034f43",
+            known_hash="ad4fc1789d8a5073ea449049888c671899525c9a8a42359ca75d1f17d04d7929",
             progressbar=True,
             processor=unzip_processor,
         )
-        path = os.path.join(path, "avito_500k_integ_test")
+        path = os.path.join(path, "avito_100k_integ_test")
 
         # Define table names
         ads_info = os.path.join(path, "AdsInfo")
@@ -86,6 +66,8 @@ class AvitoDataset(RelBenchDataset):
             phone_requests_stream_df, "PhoneRequestDate"
         )
         visit_stream_df = clean_datetime(visit_stream_df, "ViewDate")
+
+        category_df.drop(columns=["__index_level_0__"], inplace=True)
 
         tables = {}
         tables["AdsInfo"] = Table(
@@ -145,4 +127,8 @@ class AvitoDataset(RelBenchDataset):
             },
             time_col="ViewDate",
         )
-        return Database(tables)
+        db = Database(tables)
+
+        db = db.from_(pd.Timestamp("2015-04-25"))
+
+        return db

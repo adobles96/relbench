@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "relbench"
-version = "0.1.1"
+version = "1.0.0-rc1"
 description = "RelBench: Relational Deep Learning Benchmark"
 authors = [{name = "RelBench Team", email = "relbench@cs.stanford.edu"}]
 readme = "README.md"
@@ -18,24 +18,22 @@ dependencies=[
 	"pandas",
 	"pooch",
 	"pyarrow",
-	"numpy==1.26.0",
+	"numpy",
 	"duckdb",
-	"requests",
-	"tqdm",
 	"scikit-learn",
 	"typing-extensions",
-	"matplotlib",
-	"networkx",
 ]
 
 [project.optional-dependencies]
-example=[
-	"torch",
-	"pytorch_frame>=0.2.2",
+full=[
+	"pytorch_frame>=0.2.3",
 	"torch_geometric",
-	"faiss-cpu",
+]
+example=[
 	"sentence-transformers",
-	"tensorboard",
+	"pytorch_frame[full]",
+	"torch_geometric",
+	"tqdm",
 ]
 test=[
 	"pytest",
