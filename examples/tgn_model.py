@@ -8,7 +8,7 @@ from torch_geometric.data import HeteroData
 from torch_geometric.nn import MLP, PositionalEncoding, HeteroConv, GATConv, LayerNorm
 from torch_geometric.typing import NodeType, EdgeType
 
-from relbench.external.nn import HeteroEncoder, HeteroTemporalEncoder
+from relbench.modeling.nn import HeteroEncoder, HeteroTemporalEncoder
 
 
 class HeteroTemporalEdgeEncoder(torch.nn.Module):

@@ -1,25 +1,28 @@
 import argparse
 import copy
 from functools import reduce
+import json
 import math
 import os
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
 import torch
-from inferred_stypes import dataset2inferred_stypes
 from tgn_model import Model
 from text_embedder import GloveTextEmbedding
 from torch.nn import BCEWithLogitsLoss, L1Loss
+from torch_frame import stype
 from torch_frame.config.text_embedder import TextEmbedderConfig
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.seed import seed_everything
 from tqdm import tqdm
 
-from relbench.data import NodeTask, RelBenchDataset
-from relbench.data.task_base import TaskType
+from relbench.base import Dataset, NodeTask, TaskType
 from relbench.datasets import get_dataset
-from relbench.external.graph import get_node_train_table_input, make_fact_dimension_graph
+from relbench.modeling.graph import get_node_train_table_input, make_fact_dimension_graph
+from relbench.modeling.utils import get_stype_proposal
+from relbench.tasks import get_task
 
 
 FACT_TABLES = {
@@ -34,8 +37,8 @@ DIMENSION_TABLES = {
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dataset", type=str, default="rel-event")
-parser.add_argument("--task", type=str, default="user-attendance")
+parser.add_argument("--dataset", type=str, default="rel-hm")
+parser.add_argument("--task", type=str, default="user-churn")
 parser.add_argument("--lr", type=float, default=3e-4)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--batch_size", type=int, default=512)
@@ -125,13 +128,24 @@ if __name__ == "__main__":
         torch.set_num_threads(1)
     seed_everything(args.seed)
 
-    dataset: RelBenchDataset = get_dataset(name=args.dataset, process=False)
-    task: NodeTask = dataset.get_task(args.task, process=True)
+    dataset: Dataset = get_dataset(args.dataset, download=True)
+    task: NodeTask = get_task(args.dataset, args.task, download=True)
 
-    col_to_stype_dict = dataset2inferred_stypes[args.dataset]
+    stypes_cache_path = Path(f"{args.cache_dir}/{args.dataset}/stypes.json")
+    try:
+        with open(stypes_cache_path, "r") as f:
+            col_to_stype_dict = json.load(f)
+        for table, col_to_stype in col_to_stype_dict.items():
+            for col, stype_str in col_to_stype.items():
+                col_to_stype[col] = stype(stype_str)
+    except FileNotFoundError:
+        col_to_stype_dict = get_stype_proposal(dataset.get_db())
+        Path(stypes_cache_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(stypes_cache_path, "w") as f:
+            json.dump(col_to_stype_dict, f, indent=2, default=str)
 
     data, col_stats_dict = make_fact_dimension_graph(
-        dataset.db,
+        dataset.get_db(),
         fact_tables=FACT_TABLES[args.dataset],
         dimension_tables=DIMENSION_TABLES[args.dataset],
         col_to_stype_dict=col_to_stype_dict,
@@ -154,8 +168,9 @@ if __name__ == "__main__":
         tune_metric = "mae"
         higher_is_better = False
         # Get the clamp value at inference time
+        train_table = task.get_table("train")
         clamp_min, clamp_max = np.percentile(
-            task.train_table.df[task.target_col].to_numpy(), [2, 98]
+            train_table.df[task.target_col].to_numpy(), [2, 98]
         )
         multilabel = False
     elif task.task_type == TaskType.MULTILABEL_CLASSIFICATION:
@@ -168,11 +183,8 @@ if __name__ == "__main__":
         raise ValueError(f"Task type {task.task_type} is unsupported")
 
     loader_dict: Dict[str, NeighborLoader] = {}
-    for split, table in [
-        ("train", task.train_table),
-        ("val", task.val_table),
-        ("test", task.test_table),
-    ]:
+    for split in ["train", "val", "test"]:
+        table = task.get_table(split)
         table_input = get_node_train_table_input(
             table=table, task=task, multilabel=multilabel
         )
