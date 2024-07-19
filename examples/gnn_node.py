@@ -51,7 +51,7 @@ if torch.cuda.is_available():
 seed_everything(args.seed)
 
 dataset: Dataset = get_dataset(args.dataset, download=True)
-task: NodeTask = get_task(args.dataset, args.task, download=True)
+task: NodeTask = get_task(args.dataset, args.task, download=False)
 
 
 stypes_cache_path = Path(f"{args.cache_dir}/{args.dataset}/stypes.json")
@@ -69,6 +69,7 @@ except FileNotFoundError:
 
 data, col_stats_dict = make_pkey_fkey_graph(
     dataset.get_db(),
+    [task, get_task(args.dataset, 'item-sales', download=False)],
     col_to_stype_dict=col_to_stype_dict,
     text_embedder_cfg=TextEmbedderConfig(
         text_embedder=GloveTextEmbedding(device=device), batch_size=256

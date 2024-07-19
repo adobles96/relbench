@@ -71,7 +71,7 @@ class UserChurnTask(NodeTask):
     task_type = TaskType.BINARY_CLASSIFICATION
     entity_col = "customer_id"
     entity_table = "customer"
-    pred_time_col = "timestamp"
+    time_col = "timestamp"
     eval_time_col = "eval_time"
     target_col = "churn"
     timedelta = pd.Timedelta(days=7)
@@ -128,7 +128,7 @@ class ItemSalesTask(NodeTask):
     task_type = TaskType.REGRESSION
     entity_col = "article_id"
     entity_table = "article"
-    pred_time_col = "timestamp"
+    time_col = "timestamp"
     eval_time_col = "eval_time"
     target_col = "sales"
     timedelta = pd.Timedelta(days=7)

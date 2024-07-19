@@ -24,7 +24,7 @@ class NodeTask(BaseTask):
 
     entity_col: str
     entity_table: str
-    pred_time_col: str
+    time_col: str
     eval_time_col: str
     target_col: str
     task_type: TaskType
