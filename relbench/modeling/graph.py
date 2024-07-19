@@ -20,7 +20,7 @@ from relbench.modeling.utils import remove_pkey_fkey, to_unix_time
 def _get_task_col_to_stype_dict(task: NodeTask):
     return {
         task.entity_table: stype.numerical,
-        task.pred_time_col: stype.timestamp,
+        task.time_col: stype.timestamp,
         task.eval_time_col: stype.timestamp,
         task.target_col: stype.numerical,
     }
