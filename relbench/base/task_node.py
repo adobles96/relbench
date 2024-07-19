@@ -24,7 +24,8 @@ class NodeTask(BaseTask):
 
     entity_col: str
     entity_table: str
-    time_col: str
+    pred_time_col: str
+    eval_time_col: str
     target_col: str
     task_type: TaskType
     timedelta: pd.Timedelta

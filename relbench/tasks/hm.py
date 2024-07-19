@@ -71,7 +71,8 @@ class UserChurnTask(NodeTask):
     task_type = TaskType.BINARY_CLASSIFICATION
     entity_col = "customer_id"
     entity_table = "customer"
-    time_col = "timestamp"
+    pred_time_col = "timestamp"
+    eval_time_col = "eval_time"
     target_col = "churn"
     timedelta = pd.Timedelta(days=7)
     metrics = [average_precision, accuracy, f1, roc_auc]
@@ -85,6 +86,7 @@ class UserChurnTask(NodeTask):
             f"""
             SELECT
                 timestamp,
+                timestamp + INTERVAL '{self.timedelta}' AS eval_time,
                 customer_id,
                 CAST(
                     NOT EXISTS (
@@ -126,7 +128,8 @@ class ItemSalesTask(NodeTask):
     task_type = TaskType.REGRESSION
     entity_col = "article_id"
     entity_table = "article"
-    time_col = "timestamp"
+    pred_time_col = "timestamp"
+    eval_time_col = "eval_time"
     target_col = "sales"
     timedelta = pd.Timedelta(days=7)
     metrics = [r2, mae, rmse]
@@ -140,6 +143,7 @@ class ItemSalesTask(NodeTask):
             f"""
             SELECT
                 timestamp,
+                timestamp + INTERVAL '{self.timedelta}' AS eval_time,
                 article_id,
                 sales
             FROM

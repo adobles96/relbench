@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -17,8 +17,18 @@ from relbench.base import Database, LinkTask, NodeTask, Table, TaskType
 from relbench.modeling.utils import remove_pkey_fkey, to_unix_time
 
 
+def _get_task_col_to_stype_dict(task: NodeTask):
+    return {
+        task.entity_table: stype.numerical,
+        task.pred_time_col: stype.timestamp,
+        task.eval_time_col: stype.timestamp,
+        task.target_col: stype.numerical,
+    }
+
+
 def make_pkey_fkey_graph(
     db: Database,
+    tasks: List[NodeTask],
     col_to_stype_dict: Dict[str, Dict[str, stype]],
     text_embedder_cfg: Optional[TextEmbedderConfig] = None,
     cache_dir: Optional[str] = None,
@@ -28,6 +38,8 @@ def make_pkey_fkey_graph(
 
     Args:
         db: A database object containing a set of tables.
+        tasks: A list of tasks defined on the dataset. Each task's train table will be included in
+            the graph, with the appropriate temporal censoring as specified by `eval_time_col`.
         col_to_stype_dict: Column to stype for
             each table.
         text_embedder_cfg: Text embedder config.
@@ -45,7 +57,14 @@ def make_pkey_fkey_graph(
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
-    for table_name, table in db.table_dict.items():
+    # HACK
+    table_dict = db.table_dict.copy()
+    for task in tasks:
+        train_table_name = task.__class__.__name__
+        table_dict[train_table_name] = task.get_table("train")
+        col_to_stype_dict[train_table_name] = _get_task_col_to_stype_dict(task)
+
+    for table_name, table in table_dict.items():
         # Materialize the tables into tensor frames:
         df = table.df
         # Ensure that pkey is consecutive.
@@ -79,8 +98,13 @@ def make_pkey_fkey_graph(
 
         # Add time attribute:
         if table.time_col is not None:
+            # HACK
+            time_col = (
+                table.time_col if not hasattr(table, "eval_time_col")
+                else table.eval_time_col
+            )
             data[table_name].time = torch.from_numpy(
-                to_unix_time(table.df[table.time_col])
+                to_unix_time(table.df[time_col])
             )
 
         # Add edges:
