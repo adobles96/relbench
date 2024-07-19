@@ -61,7 +61,9 @@ def make_pkey_fkey_graph(
     table_dict = db.table_dict.copy()
     for task in tasks:
         train_table_name = task.__class__.__name__
-        table_dict[train_table_name] = task.get_table("train")
+        train_table = task.get_table("train")
+        train_table.eval_time_col = task.eval_time_col
+        table_dict[train_table_name] = train_table
         col_to_stype_dict[train_table_name] = _get_task_col_to_stype_dict(task)
 
     for table_name, table in table_dict.items():
