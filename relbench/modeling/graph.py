@@ -60,11 +60,19 @@ def make_pkey_fkey_graph(
     # HACK
     table_dict = db.table_dict.copy()
     for task in tasks:
-        train_table_name = task.__class__.__name__
-        train_table = task.get_table("train")
-        train_table.eval_time_col = task.eval_time_col
-        table_dict[train_table_name] = train_table
-        col_to_stype_dict[train_table_name] = _get_task_col_to_stype_dict(task)
+        labels_table_name = f'{task.__class__.__name__}_labels'
+        labels = Table(
+            df=pd.concat([
+                task.get_table("train").df,
+                task.get_table("val").df,
+            ]),
+            fkey_col_to_pkey_table={task.entity_col: task.entity_table},
+            pkey_col=None,
+            time_col=task.time_col
+        )
+        labels.eval_time_col = task.eval_time_col
+        table_dict[labels_table_name] = labels
+        col_to_stype_dict[labels_table_name] = _get_task_col_to_stype_dict(task)
 
     for table_name, table in table_dict.items():
         # Materialize the tables into tensor frames:
